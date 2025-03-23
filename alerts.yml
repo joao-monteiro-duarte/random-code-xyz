@@ -1,0 +1,47 @@
+groups:
+- name: trading_alerts
+  rules:
+  - alert: HighTradeExecutionTime
+    expr: trade_execution_seconds_sum > 2
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High trade execution time"
+      description: "Trade execution is taking longer than 2 seconds"
+
+  - alert: PortfolioVolatility
+    expr: portfolio_volatility_pct > 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High portfolio volatility"
+      description: "Portfolio volatility is above 10%"
+
+  - alert: PortfolioLoss
+    expr: portfolio_profit_loss_pct < -5
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Portfolio loss alert"
+      description: "Portfolio has lost more than 5% of its value"
+
+  - alert: NoCoinsHeld
+    expr: coins_held_total == 0
+    for: 1h
+    labels:
+      severity: info
+    annotations:
+      summary: "No coins in portfolio"
+      description: "The portfolio is currently not holding any coins"
+
+  - alert: ApiEndpointDown
+    expr: up{job="crypto_trading_pool"} == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "API endpoint is down"
+      description: "The crypto trading pool API is not responding"
