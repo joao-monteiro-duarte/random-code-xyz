@@ -354,13 +354,18 @@ async def run_cycle(vph_threshold):
                     await log_step(f"This cycle included {low_vph_count} videos with VPH < 500 that received a minimum 5% weight boost")
                 
                 # Monitor for significant sentiment shifts
-                for coin, new_score in global_scores.items():
-                    old_score = previous_scores.get(coin, 0)
-                    if abs(new_score - old_score) > 3:  # Threshold for significant change
-                        await log_step(f"⚠️ SIGNIFICANT SCORE CHANGE for {coin}: {old_score:.2f} → {new_score:.2f}")
+                for coin, new_score_data in global_scores.items():
+                    old_score_data = previous_scores.get(coin, 0)
+                    
+                    # Extract score values based on data type
+                    new_score_value = new_score_data["score"] if isinstance(new_score_data, dict) else new_score_data
+                    old_score_value = old_score_data["score"] if isinstance(old_score_data, dict) else old_score_data
+                    
+                    if abs(new_score_value - old_score_value) > 3:  # Threshold for significant change
+                        await log_step(f"⚠️ SIGNIFICANT SCORE CHANGE for {coin}: {old_score_value:.2f} → {new_score_value:.2f}")
                         
                         # If change is extremely large, flag for potential manipulation
-                        if abs(new_score - old_score) > 5:
+                        if abs(new_score_value - old_score_value) > 5:
                             await log_step(f"🚨 POSSIBLE MANIPULATION ALERT: Extreme score change for {coin}")
             else:
                 await log_step("No valid videos with transcripts to analyze in this cycle")

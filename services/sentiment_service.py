@@ -4,6 +4,7 @@ Service for analyzing sentiment in cryptocurrency video transcripts using Mixtra
 import logging
 import os
 import json
+import importlib.util
 from typing import Dict, List, Tuple, Optional, Any, Union
 from datetime import datetime
 
@@ -12,15 +13,30 @@ from models.video import Video
 
 logger = logging.getLogger(__name__)
 
-# Try to import Langroid components - wrap in try/except to allow tests to run without Langroid
+# Handle Langroid imports with robust fallback
+LANGROID_AVAILABLE = False
 try:
-    import langroid as lr
-    import langroid.language_models as lm
-    from langroid.language_models.openrouter_llm import OpenRouterLLM
-    LANGROID_AVAILABLE = True
-except ImportError:
-    logger.warning("Langroid not available, sentiment analysis will be mocked")
-    LANGROID_AVAILABLE = False
+    # Check if langroid is installed
+    if importlib.util.find_spec("langroid") is not None:
+        import langroid as lr
+        
+        # Try to import the necessary components
+        try:
+            # Get a reference to the language_models module
+            lm = lr.language_models
+            
+            # Specifically try to get the OpenAI models which should be available
+            if hasattr(lm, "OpenAIGPT"):
+                LANGROID_AVAILABLE = True
+                logger.info("Successfully imported Langroid components")
+            else:
+                logger.warning("Langroid installed but OpenAIGPT not found")
+        except Exception as e:
+            logger.warning(f"Error importing Langroid components: {e}")
+    else:
+        logger.warning("Langroid package not found")
+except Exception as e:
+    logger.warning(f"Error checking for Langroid: {e}")
 
 class SentimentAnalysisService:
     """
@@ -44,47 +60,90 @@ class SentimentAnalysisService:
         self.sentiment_cache = {}  # Cache of video_id -> sentiment scores
         
         # Set up Langroid LLM if available
+        self.agent = None
+        self.model_ready = False
+        
         if LANGROID_AVAILABLE and self.api_key:
             try:
-                # Configure OpenRouter LLM with Mixtral model
-                self.llm_config = lm.OpenRouterLLMConfig(
-                    model="mistralai/mixtral-8x7b-instruct",
-                    api_key=self.api_key,
-                    temperature=0.1,  # Lower temperature for more consistent outputs
-                    max_tokens=1000,
-                )
-                self.llm = OpenRouterLLM(self.llm_config)
+                # Import the configuration class
+                from langroid.language_models import LLMConfig, OpenAIGPT, OpenAIChatModel
                 
-                # Set up ChatAgent for analysis with focus on small-cap coins
-                self.agent_config = lr.ChatAgentConfig(
-                    llm=self.llm_config,
-                    system_message="""You analyze cryptocurrency video transcripts for sentiment with special focus on identifying early signs of pumps and dumps.
-                    Analyze the given transcript and identify sentiment towards specific cryptocurrencies with EXTRA ATTENTION to smaller, lesser-known coins.
+                # Create the correct OpenAIGPTConfig for OpenRouter
+                logger.info("Configuring Langroid with OpenRouter for Mixtral model")
+                
+                # According to the docs, for OpenRouter we should use:
+                # 1. chat_model="openrouter/mistralai/mixtral-8x7b-instruct" 
+                # 2. Set OPENROUTER_API_KEY in env (already done) or pass it directly
+                try:
+                    # Create proper configuration using OpenAIGPTConfig
+                    openai_config = lm.OpenAIGPTConfig(
+                        chat_model="openrouter/mistralai/mixtral-8x7b-instruct",
+                        api_key=self.api_key,  # This should ideally come from OPENROUTER_API_KEY env var
+                        temperature=0.1,
+                        max_output_tokens=1000,  # Note: use max_output_tokens, not max_tokens
+                    )
                     
-                    Rate sentiment for each mentioned crypto on a scale of -10 to +10:
-                    - -10: Extremely negative (strong warnings about scams, rug pulls)
-                    - -5: Moderately negative (criticism, skepticism)
-                    - 0: Neutral or balanced coverage
-                    - +5: Moderately positive (optimistic outlook, growth potential)
-                    - +10: Extremely positive (price predictions, "moon" talk, strong buying signals)
+                    # Create LLM instance
+                    self.llm = OpenAIGPT(openai_config)
                     
-                    IMPORTANT: While you should include major cryptocurrencies like Bitcoin and Ethereum if mentioned, pay SPECIAL ATTENTION to:
-                    1. Low-cap altcoins and meme coins that may be subject to pump and dump schemes
-                    2. New coins or tokens being heavily promoted
-                    3. Any price predictions or claims about imminent price movements
-                    4. Emotional language like "going to moon", "100x", "guaranteed gains", etc.
+                    # OpenRouter headers are managed internally by Langroid when using the correct chat_model format
                     
-                    For smaller coins, detect euphoric sentiment that could indicate a pump is starting, or panic selling that could indicate a dump."""
-                )
-                self.agent = lr.ChatAgent(self.agent_config)
-                logger.info("Successfully initialized Langroid agent with Mixtral model")
+                    # Set up ChatAgent for analysis with focus on small-cap coins
+                    # In Langroid 0.47.2, the parameter is simply 'llm'
+                    self.agent_config = lr.ChatAgentConfig(
+                        llm=openai_config,  # Use llm for OpenAIGPTConfig
+                        system_message="""You analyze cryptocurrency video transcripts for sentiment with special focus on identifying early signs of pumps and dumps.
+                        Analyze the given transcript and identify sentiment towards specific cryptocurrencies with EXTRA ATTENTION to smaller, lesser-known coins.
+                        
+                        Rate sentiment for each mentioned crypto on a scale of -10 to +10:
+                        - -10: Extremely negative (strong warnings about scams, rug pulls)
+                        - -5: Moderately negative (criticism, skepticism)
+                        - 0: Neutral or balanced coverage
+                        - +5: Moderately positive (optimistic outlook, growth potential)
+                        - +10: Extremely positive (price predictions, "moon" talk, strong buying signals)
+                        
+                        IMPORTANT: While you should include major cryptocurrencies like Bitcoin and Ethereum if mentioned, pay SPECIAL ATTENTION to:
+                        1. Low-cap altcoins and meme coins that may be subject to pump and dump schemes
+                        2. New coins or tokens being heavily promoted
+                        3. Any price predictions or claims about imminent price movements
+                        4. Emotional language like "going to moon", "100x", "guaranteed gains", etc.
+                        
+                        For smaller coins, detect euphoric sentiment that could indicate a pump is starting, or panic selling that could indicate a dump."""
+                    )
+                    
+                    # Create the agent
+                    self.agent = lr.ChatAgent(self.agent_config)
+                    
+                    # Test the connection
+                    try:
+                        test_prompt = "Respond with a short 'OK' if you're working properly."
+                        response = self.agent.llm_response(test_prompt)
+                        
+                        # In Langroid 0.47.2, the response might be a ChatDocument object
+                        if hasattr(response, 'content'):
+                            response_text = response.content
+                        else:
+                            response_text = str(response)
+                            
+                        if response_text and len(response_text) > 0:
+                            self.model_ready = True
+                            logger.info(f"Langroid agent test successful: {response_text[:30]}...")
+                        else:
+                            logger.warning("Langroid agent test returned empty response")
+                    except Exception as e:
+                        logger.warning(f"Langroid agent test failed: {e}")
+                except Exception as e:
+                    logger.error(f"Error setting up OpenAI/OpenRouter integration: {e}")
             except Exception as e:
                 logger.error(f"Error initializing Langroid agent: {e}")
                 self.agent = None
         else:
-            self.agent = None
+            if not LANGROID_AVAILABLE:
+                logger.warning("Langroid not available, sentiment analysis will be mocked")
+            if not self.api_key:
+                logger.warning("No OpenRouter API key provided, sentiment analysis will be mocked")
     
-    async def analyze_transcript(self, video_id: str, transcript: str) -> Dict[str, float]:
+    async def analyze_transcript(self, video_id: str, transcript: str) -> Dict[str, Dict[str, Any]]:
         """
         Analyze sentiment in a video transcript using Mixtral via Langroid.
         
@@ -93,41 +152,59 @@ class SentimentAnalysisService:
             transcript: The video transcript text
             
         Returns:
-            Dictionary mapping cryptocurrency names to sentiment scores (-10 to +10)
+            Dictionary mapping cryptocurrency names to sentiment data including score, urgency, etc.
         """
-        if not LANGROID_AVAILABLE or not self.agent:
+        if not LANGROID_AVAILABLE or not self.agent or not self.model_ready:
             # Mock implementation with detailed format
             logger.info(f"Mocking sentiment analysis for video {video_id}")
-            return {
+            
+            # Check if the video ID ends with certain characters to vary the mock data
+            # This creates more realistic mock data with some variation
+            mock_variation = sum(ord(c) for c in video_id[-2:]) % 5
+            
+            mock_data = {
                 "bitcoin": {
-                    "score": 5.0,
+                    "score": 5.0 + (mock_variation * 0.5),
                     "reason": "Positive outlook on adoption and institutional interest",
                     "price_prediction": "$100,000 by end of year",
                     "is_small_cap": False,
                     "urgency": "low"
                 },
                 "ethereum": {
-                    "score": 3.0,
+                    "score": 3.0 + (mock_variation * 0.3),
                     "reason": "Neutral-positive sentiment with some scalability concerns",
                     "price_prediction": None,
                     "is_small_cap": False,
                     "urgency": "low"
                 },
                 "solana": {
-                    "score": 7.0,
+                    "score": 6.0 + (mock_variation * 0.4),
                     "reason": "Strong enthusiasm about performance and developer activity",
                     "price_prediction": "$300 target mentioned",
                     "is_small_cap": False,
                     "urgency": "medium"
-                },
-                "pepe": {
-                    "score": 9.0,
+                }
+            }
+            
+            # Add a meme coin with varying sentiment for more dynamic mock data
+            if mock_variation > 2:
+                mock_data["pepe"] = {
+                    "score": 8.5 + (mock_variation * 0.3),
                     "reason": "Extreme hype about potential short-term gains",
                     "price_prediction": "10x in coming weeks",
                     "is_small_cap": True,
                     "urgency": "high"
                 }
-            }
+            elif mock_variation > 0:
+                mock_data["shiba"] = {
+                    "score": 7.0 + (mock_variation * 0.4),
+                    "reason": "Growing community interest and new exchange listings",
+                    "price_prediction": "New ATH expected",
+                    "is_small_cap": True,
+                    "urgency": "medium"
+                }
+                
+            return mock_data
             
         logger.info(f"Analyzing sentiment for video {video_id}")
         
@@ -191,13 +268,19 @@ class SentimentAnalysisService:
         
         try:
             # Use Langroid agent to analyze sentiment
-            response = await self.agent.llm_response(prompt)
+            response = self.agent.llm_response(prompt)
+            
+            # Handle response which might be a ChatDocument in Langroid 0.47.2
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
             
             # Extract JSON from the response
             try:
                 # Find JSON content in the response
                 import re
-                json_match = re.search(r'({.*})', response.strip(), re.DOTALL)
+                json_match = re.search(r'({.*})', response_text.strip(), re.DOTALL)
                 
                 if json_match:
                     json_text = json_match.group(1)
@@ -219,11 +302,11 @@ class SentimentAnalysisService:
                     return detailed_scores
                 else:
                     logger.error(f"No JSON found in response for video {video_id}")
-                    logger.debug(f"Raw response: {response}")
+                    logger.debug(f"Raw response: {response_text}")
                     return {}
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse sentiment analysis for video {video_id}: {e}")
-                logger.debug(f"Raw response: {response}")
+                logger.debug(f"Raw response: {response_text}")
                 return {}
         except Exception as e:
             logger.error(f"Error in sentiment analysis for video {video_id}: {e}")

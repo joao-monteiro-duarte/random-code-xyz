@@ -27,7 +27,7 @@ REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 REDIS_EXPIRE = int(os.getenv("REDIS_EXPIRE", "86400"))  # 24 hours in seconds
 
 # Application settings
-VPH_THRESHOLD = int(os.getenv("VPH_THRESHOLD", "500"))
+VPH_THRESHOLD = float(os.getenv("VPH_THRESHOLD", "500"))
 MIN_WEIGHT = float(os.getenv("MIN_WEIGHT", "0.05"))  # 5% minimum weight for low-VPH videos
 MAX_VIDEOS = int(os.getenv("MAX_VIDEOS", "15"))
 FETCH_INTERVAL = int(os.getenv("FETCH_INTERVAL", "300"))  # 5 minutes in seconds

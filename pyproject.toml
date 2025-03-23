@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-trading-pool"
+version = "0.1.0"
+description = "Cryptocurrency trading system based on YouTube video sentiment analysis"
+readme = "README.md"
+authors = [
+    {name = "Project Contributors"}
+]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "aiohttp",
+    "beautifulsoup4",
+    "ccxt",
+    "coloredlogs",
+    "fakeredis",
+    "fastapi",
+    "langroid>=0.47.2",
+    "pyyaml",
+    "redis",
+    "uvicorn",
+    "youtube_transcript_api",
+    "yt-dlp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "coverage[toml]",
+    "flake8",
+    "isort",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.coverage.run]
+source = ["crypto_trading_pool"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "pass",
+    "raise ImportError",
+]

@@ -43,11 +43,15 @@ The system implements a dual-cycle framework with two distinct processing freque
 
 The application is built using a modular, service-based architecture:
 
-- **Models**: Data models representing domain objects (like videos)
-- **Services**: Core business logic organized as services
-- **Utils**: Utility classes and functions (cache management, etc.)
-- **Config**: Configuration settings and environment variables
-- **API**: FastAPI web interface for interacting with the application
+- **models/**: Data models representing domain objects (like videos)
+- **services/**: Core business logic organized as services
+- **utils/**: Utility classes and functions (cache management, etc.)
+- **config/**: Configuration settings and environment variables
+- **api.py**: FastAPI web interface for interacting with the application
+- **scripts/**: Utility scripts for running, testing, and monitoring
+- **docs/**: Project documentation organized by topic
+- **tests/**: Test suite organized by type (unit, integration)
+- **logs/**: Log files (not committed to repository)
 
 ### Key Components
 
@@ -129,7 +133,7 @@ WHISPER_MODEL=small  # Options: tiny, base, small, medium, large
 #### API Server
 
 ```bash
-./run.sh --api
+./scripts/run.sh --api
 ```
 
 The API will be available at http://localhost:8000
@@ -137,7 +141,7 @@ The API will be available at http://localhost:8000
 #### Single Processing Cycle
 
 ```bash
-./run.sh --cycle --vph 500.0
+./scripts/run.sh --cycle --vph 500.0
 ```
 
 ## Dual-Cycle Framework
@@ -172,16 +176,29 @@ The system acquires transcripts through a three-stage process:
 
 ## Testing
 
-Run tests using pytest:
+Run all tests using pytest:
 
 ```bash
-python run_tests.py
+python -m pytest
+```
+
+Run specific test categories:
+
+```bash
+# Unit tests only
+python -m pytest tests/unit/
+
+# Integration tests only
+python -m pytest tests/integration/
+
+# Run dual-cycle integration test (60+ minutes)
+./scripts/testing/run_dual_cycle_test.sh
 ```
 
 Test the transcript service with audio transcription:
 
 ```bash
-python test_transcript_audio.py <video_id>
+python tests/test_transcript_audio.py <video_id>
 ```
 
 Find testable videos:
@@ -241,6 +258,8 @@ The application uses Langroid with the Mixtral-8x7b-instruct model to analyze se
 5. Scores are weighted by the video's VPH (views per hour)
 6. New content receives a 20% freshness boost in quick decisions
 7. Newly discovered coins receive a 10% boost for visibility
+
+For detailed information on the latest Langroid integration improvements, see [LANGROID_INTEGRATION.md](./docs/architecture/LANGROID_INTEGRATION.md).
 
 ## Trading Logic
 

@@ -95,7 +95,10 @@ class CryptoTradingService:
         
         # Set up specialized services
         self.sentiment_service = SentimentAnalysisService(api_key=self.openrouter_api_key)
-        self.market_data_service = MarketDataService(api_key=self.coingecko_api_key)
+        self.market_data_service = MarketDataService(
+            api_key=self.coingecko_api_key,
+            test_mode=test_mode  # Use mock data in test mode
+        )
         self.trade_service = TradeService(
             exchange_id="binance",
             api_key=self.exchange_api_key,

@@ -6,6 +6,8 @@ import aiohttp
 import logging
 import json
 import os
+import time
+import asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 import numpy as np
@@ -19,12 +21,13 @@ class MarketDataService:
     Specialized in identifying small-cap coins with high trading potential.
     """
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, test_mode: bool = False):
         """
         Initialize the market data service.
         
         Args:
             api_key: API key for CoinGecko Pro (optional)
+            test_mode: Parameter for compatibility with CryptoTradingService (not used)
         """
         self.api_key = api_key or os.getenv("COINGECKO_API_KEY")
         self.base_url = "https://api.coingecko.com/api/v3"
@@ -33,7 +36,74 @@ class MarketDataService:
         self.small_cap_coins_cache = []
         self.last_cache_update = None
         self.cache_ttl = 3600  # 1 hour
+        # test_mode parameter ignored - just for compatibility
         
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 1.5  # seconds between requests (free tier = 30 req/min)
+        self.rate_limit_remaining = 30  # Free tier default
+        self.rate_limit_reset_time = 0
+        self.backoff_time = 0
+    
+    async def _respect_rate_limits(self):
+        """Respect API rate limits with exponential backoff on errors"""
+        now = time.time()
+        
+        # Check if we need to wait for rate limit reset
+        if self.rate_limit_remaining <= 1 and now < self.rate_limit_reset_time:
+            wait_time = self.rate_limit_reset_time - now + 1  # Add 1 second buffer
+            logger.warning(f"Rate limit almost reached. Waiting {wait_time:.1f}s for reset")
+            await asyncio.sleep(wait_time)
+            return
+        
+        # Apply backoff if there was a previous error
+        if self.backoff_time > 0 and now < self.backoff_time:
+            wait_time = self.backoff_time - now + 0.5  # Add small buffer
+            logger.warning(f"In backoff period. Waiting {wait_time:.1f}s")
+            await asyncio.sleep(wait_time)
+            return
+        
+        # Normal rate limiting - ensure minimum interval between requests
+        time_since_last = now - self.last_request_time
+        if time_since_last < self.min_request_interval:
+            wait_time = self.min_request_interval - time_since_last
+            await asyncio.sleep(wait_time)
+        
+        # Update last request time
+        self.last_request_time = time.time()
+    
+    async def _handle_api_response(self, response):
+        """Handle API response and update rate limit tracking"""
+        # Check for rate limit headers
+        if 'x-ratelimit-remaining' in response.headers:
+            self.rate_limit_remaining = int(response.headers['x-ratelimit-remaining'])
+            
+        if 'x-ratelimit-reset' in response.headers:
+            self.rate_limit_reset_time = int(response.headers['x-ratelimit-reset'])
+        
+        # Handle rate limiting errors
+        if response.status == 429:  # Too Many Requests
+            # Exponential backoff - wait 10 seconds by default, more if we're close to limit
+            backoff_seconds = 10 + (30 - self.rate_limit_remaining) * 2 if self.rate_limit_remaining > 0 else 30
+            self.backoff_time = time.time() + backoff_seconds
+            logger.warning(f"Rate limit exceeded. Backing off for {backoff_seconds}s")
+            return None
+            
+        # Handle other errors
+        if response.status != 200:
+            if response.status == 400:  # Bad Request
+                logger.error(f"Bad request error: {response.status}")
+                # Short backoff for bad requests
+                self.backoff_time = time.time() + 5
+            elif response.status >= 500:  # Server Error
+                # Longer backoff for server errors
+                self.backoff_time = time.time() + 10
+                logger.error(f"Server error: {response.status}")
+            return None
+            
+        # Return the response data
+        return await response.json()
+            
     async def initialize(self):
         """Initialize the market data service."""
         logger.info("Initializing MarketDataService")
@@ -57,9 +127,16 @@ class MarketDataService:
             market_cap_threshold: Maximum market cap in USD (default: $50M)
         """
         try:
+            # Respect rate limits
+            await self._respect_rate_limits()
+            
             headers = {}
             if self.api_key:
-                headers["x-cg-pro-api-key"] = self.api_key
+                # Use demo header for keys starting with CG-
+                if self.api_key.startswith("CG-"):
+                    headers["x-cg-demo-api-key"] = self.api_key
+                else:
+                    headers["x-cg-pro-api-key"] = self.api_key
             
             # Fetch coins sorted by market cap (ascending)
             async with self.session.get(
@@ -73,11 +150,11 @@ class MarketDataService:
                 },
                 headers=headers
             ) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch small cap coins: {response.status}")
+                data = await self._handle_api_response(response)
+                
+                if not data:
+                    logger.warning("Failed to fetch small cap coins, keeping existing cache")
                     return
-                    
-                data = await response.json()
                 
                 # Filter coins below the threshold
                 small_caps = [
@@ -94,13 +171,15 @@ class MarketDataService:
                     if coin.get("market_cap", 0) is not None and coin.get("market_cap", 0) <= market_cap_threshold
                 ]
                 
-                # Sort by volatility (24h price change, absolute value)
-                small_caps.sort(key=lambda x: abs(x.get("price_change_24h", 0) or 0), reverse=True)
-                self.small_cap_coins_cache = small_caps
-                self.last_cache_update = datetime.now()
-                
-                logger.info(f"Refreshed small cap coins cache with {len(small_caps)} coins")
-                
+                # Only update cache if we got valid data
+                if small_caps:
+                    # Sort by volatility (24h price change, absolute value)
+                    small_caps.sort(key=lambda x: abs(x.get("price_change_24h", 0) or 0), reverse=True)
+                    self.small_cap_coins_cache = small_caps
+                    self.last_cache_update = datetime.now()
+                    
+                    logger.info(f"Refreshed small cap coins cache with {len(small_caps)} coins")
+                    
         except Exception as e:
             logger.error(f"Error refreshing small cap coins: {e}")
             
@@ -139,10 +218,17 @@ class MarketDataService:
                 if cache_age < 300:  # 5 minutes TTL for coin data
                     return cache_entry["data"]
             
+            # Respect rate limits for API calls
+            await self._respect_rate_limits()
+            
             # Fetch fresh data
             headers = {}
             if self.api_key:
-                headers["x-cg-pro-api-key"] = self.api_key
+                # Use demo header for keys starting with CG-
+                if self.api_key.startswith("CG-"):
+                    headers["x-cg-demo-api-key"] = self.api_key
+                else:
+                    headers["x-cg-pro-api-key"] = self.api_key
                 
             async with self.session.get(
                 f"{self.base_url}/coins/{coin_id}",
@@ -155,11 +241,11 @@ class MarketDataService:
                 },
                 headers=headers
             ) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch data for coin {coin_id}: {response.status}")
+                data = await self._handle_api_response(response)
+                
+                if not data:
+                    logger.warning(f"Failed to fetch data for coin {coin_id}")
                     return None
-                    
-                data = await response.json()
                 
                 # Extract relevant data
                 result = {
@@ -221,57 +307,30 @@ class MarketDataService:
             if coin["symbol"] == normalized_symbol:
                 return coin
                 
-        # Second, check mock data for testing (especially for small-cap meme coins)
-        mock_coins = {
-            "PEPE": {
-                "id": "pepe",
-                "symbol": "PEPE",
-                "name": "Pepe",
-                "market_cap": 30000000,  # $30M market cap
-                "current_price": 0.00005,
-                "price_change_24h": 15.2,
-                "volume_24h": 5000000
-            },
-            "DOGE": {
-                "id": "dogecoin",
-                "symbol": "DOGE",
-                "name": "Dogecoin",
-                "market_cap": 12000000000,  # $12B market cap
-                "current_price": 0.12,
-                "price_change_24h": 2.1,
-                "volume_24h": 1200000000
-            },
-            "SHIB": {
-                "id": "shiba-inu",
-                "symbol": "SHIB",
-                "name": "Shiba Inu",
-                "market_cap": 5000000000,  # $5B market cap
-                "current_price": 0.000025,
-                "price_change_24h": 1.5,
-                "volume_24h": 500000000
-            }
-        }
-        
-        if normalized_symbol in mock_coins:
-            logger.info(f"Using mock data for {normalized_symbol}")
-            return mock_coins[normalized_symbol]
-                
-        # If not found, try searching all coins
+        # If not found, try searching all coins with proper rate limiting
         try:
+            # Respect rate limits
+            await self._respect_rate_limits()
+            
             headers = {}
             if self.api_key:
-                headers["x-cg-pro-api-key"] = self.api_key
+                # Use demo header for keys starting with CG-
+                if self.api_key.startswith("CG-"):
+                    headers["x-cg-demo-api-key"] = self.api_key
+                else:
+                    headers["x-cg-pro-api-key"] = self.api_key
                 
             async with self.session.get(
                 f"{self.base_url}/search",
                 params={"query": symbol},
                 headers=headers
             ) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to search for coin {symbol}: {response.status}")
+                data = await self._handle_api_response(response)
+                
+                if not data:
+                    logger.warning(f"Failed to search for coin {symbol}")
                     return None
-                    
-                data = await response.json()
+                
                 coins = data.get("coins", [])
                 
                 if not coins:
@@ -299,18 +358,6 @@ class MarketDataService:
         Returns:
             Dictionary with volatility metrics
         """
-        # Check for mock data first for known volatile meme coins
-        mock_volatility = {
-            "pepe": {"volatility": 25.0, "volume_to_market_cap": 0.3, "is_volatile": True},
-            "dogecoin": {"volatility": 15.0, "volume_to_market_cap": 0.25, "is_volatile": True},
-            "shiba-inu": {"volatility": 20.0, "volume_to_market_cap": 0.28, "is_volatile": True}
-        }
-        
-        if coin_id.lower() in mock_volatility:
-            logger.info(f"Using mock volatility data for {coin_id}")
-            return mock_volatility[coin_id.lower()]
-        
-        # Proceed with regular data lookup
         coin_data = await self.get_coin_data(coin_id)
         if not coin_data:
             return {"volatility": 0, "is_volatile": False}
@@ -415,43 +462,18 @@ class MarketDataService:
         Returns:
             Dictionary with MACD metrics and signals
         """
-        # Check for mock data first for testing purposes
-        mock_macd_data = {
-            "pepe": {
-                "macd": 0.000002,
-                "macd_signal": 0.000001,
-                "macd_histogram": 0.000001,
-                "is_bullish": True,
-                "trend_strength": 0.75,
-                "historical_prices": [0.00004, 0.000042, 0.000044, 0.000047, 0.000049, 0.00005]
-            },
-            "dogecoin": {
-                "macd": 0.005,
-                "macd_signal": 0.003,
-                "macd_histogram": 0.002,
-                "is_bullish": True,
-                "trend_strength": 0.6,
-                "historical_prices": [0.10, 0.105, 0.107, 0.11, 0.115, 0.12]
-            },
-            "shiba-inu": {
-                "macd": 0.000001,
-                "macd_signal": 0.0000012,
-                "macd_histogram": -0.0000002,
-                "is_bullish": False,
-                "trend_strength": 0.3,
-                "historical_prices": [0.000027, 0.000026, 0.000025, 0.000024, 0.000023, 0.000025]
-            }
-        }
-        
-        if coin_id.lower() in mock_macd_data:
-            logger.info(f"Using mock MACD data for {coin_id}")
-            return mock_macd_data[coin_id.lower()]
-            
         try:
+            # Respect rate limits
+            await self._respect_rate_limits()
+            
             # Get historical price data from CoinGecko
             headers = {}
             if self.api_key:
-                headers["x-cg-pro-api-key"] = self.api_key
+                # Use demo header for keys starting with CG-
+                if self.api_key.startswith("CG-"):
+                    headers["x-cg-demo-api-key"] = self.api_key
+                else:
+                    headers["x-cg-pro-api-key"] = self.api_key
                 
             # Calculate date range
             end_date = datetime.now()
@@ -470,8 +492,10 @@ class MarketDataService:
                 },
                 headers=headers
             ) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch historical data for {coin_id}: {response.status}")
+                data = await self._handle_api_response(response)
+                
+                if not data:
+                    logger.error(f"Failed to fetch historical data for {coin_id}")
                     return {
                         "macd": 0,
                         "macd_signal": 0,
@@ -480,8 +504,7 @@ class MarketDataService:
                         "trend_strength": 0,
                         "historical_prices": []
                     }
-                    
-                data = await response.json()
+                
                 prices = data.get("prices", [])
                 
                 if not prices or len(prices) < 15:  # Need at least 15 data points for meaningful MACD

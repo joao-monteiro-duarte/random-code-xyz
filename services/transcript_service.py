@@ -339,23 +339,29 @@ class TranscriptService:
             logger.error(f"Error exporting transcripts: {e}")
             return 0
             
-    def process_video_stats(self, video: Union[Video, Tuple], now: Optional[datetime] = None) -> Union[Video, Tuple]:
+    def process_video_stats(self, video: Union[Video, Tuple, List], now: Optional[datetime] = None) -> Union[Video, Tuple]:
         """
         Process video statistics and recalculate VPH.
         
         Args:
-            video: Video object or tuple
+            video: Video object, tuple, or list
             now: Current datetime
             
         Returns:
             Updated Video object or tuple
         """
-        # Convert tuple to Video object if needed
-        tuple_input = isinstance(video, tuple)
-        if tuple_input:
-            video_obj = Video.from_tuple(video)
-        else:
+        # Check the type of input and convert appropriately
+        if isinstance(video, Video):
+            # Input is already a Video object
             video_obj = video
+            tuple_input = False
+        elif isinstance(video, (tuple, list)):
+            # Input is a tuple or list - convert to Video
+            video_obj = Video.from_tuple(video)
+            tuple_input = True
+        else:
+            # Unexpected input type
+            raise TypeError(f"Unexpected video type: {type(video)}. Expected Video, tuple, or list.")
             
         # Update VPH
         video_obj.update_vph(now)

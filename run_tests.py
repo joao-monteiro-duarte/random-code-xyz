@@ -48,6 +48,12 @@ def run_tests_with_pytest():
 if __name__ == "__main__":
     logger.info("Running tests for crypto trading pool application")
     
+    # Set environment variables for testing
+    os.environ["USE_MOCK_DATA"] = "true"  # Use mock market data
+    os.environ["REDIS_TEST_MODE"] = "true"  # Use fake Redis
+    
+    logger.info("Using mock market data and fake Redis for testing")
+    
     # Run tests with pytest
     exit_code = run_tests_with_pytest()
     
