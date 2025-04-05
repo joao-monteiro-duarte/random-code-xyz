@@ -1394,10 +1394,10 @@ class TestTradeServiceLevel1(unittest.TestCase):
         decisions = {"BTC3": {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
         with patch('trade_service.TradeService.confirm_trade', return_value=True):
             self.run_async(self.service.execute_trade(decisions, self.market_data))
-        # Assertions: BTC3 bought at 10% ($1,000 or 0.02 BTC), Level 4 and Level 2 reduced
+        # Assertions: BTC3 bought at 10% ($300 or 0.006 BTC), Level 4 and Level 2 reduced
         self.assertAlmostEqual(
             float(self.service.portfolio["coins"]["BTC3"]), 
-            0.02,  # $1,000 / $50,000
+            0.006,  # $300 / $50,000
             places=6
         )
         self.assertLess(float(self.service.portfolio["coins"]["BTC2"]), 0.04)  # Level 4 reduced

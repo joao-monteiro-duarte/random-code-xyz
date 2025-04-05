@@ -647,7 +647,7 @@ Output ONLY this JSON:
         proceeds = Decimal(str(usd_value)).quantize(Decimal('0.01'))
         level_coins = [t["coin"] for t in self.trade_history if t["confidence"] == level and t["coin"] in self.portfolio["coins"] and t["coin"] != coin]
         if not level_coins:
-            return  # Proceeds already added to USD in execute_trade
+            return  # Proceeds already in USD
 
         total_value = self.calculate_portfolio_value(market_data)
         max_coins = self.max_coins_per_level[level]
@@ -676,11 +676,10 @@ Output ONLY this JSON:
                         price = Decimal(market_data.get(level_coin.lower(), {}).get("price", 1))
                         buy_amount = (usd_to_add / price).quantize(Decimal('0.000001'))
                         self.portfolio["coins"][level_coin] += buy_amount
-                        self.portfolio["USD"] -= usd_to_add  # Add this line
+                        self.portfolio["USD"] -= usd_to_add
                         proceeds -= usd_to_add
                         logger.info(f"Distributed ${usd_to_add} to {level_coin}, new amount: {self.portfolio['coins'][level_coin]}")
-        if proceeds > 0:
-            self.portfolio["USD"] += proceeds
+        # Removed: if proceeds > 0: self.portfolio["USD"] += proceeds
 
     def redistribute_level_5_proceeds(self, coin: str, usd_value: float, market_data: Dict[str, Dict], decisions: Dict[str, Dict]) -> None:
         proceeds = Decimal(str(usd_value)).quantize(Decimal('0.01'))
@@ -689,7 +688,6 @@ Output ONLY this JSON:
         level_5_coins = [t["coin"] for t in self.trade_history if t["confidence"] == 5 and t["coin"] in self.portfolio["coins"]]
         
         if level_5_coins:
-            # Distribute to remaining Level 5 coins (not applicable in this test case)
             target_value = (Decimal('0.50') * total_value).quantize(Decimal('0.01'))
             for level_5_coin in level_5_coins:
                 current_amount = self.portfolio["coins"][level_5_coin]
@@ -701,11 +699,10 @@ Output ONLY this JSON:
                     if usd_to_add > 0:
                         buy_amount = (usd_to_add / current_price).quantize(Decimal('0.000001'))
                         self.portfolio["coins"][level_5_coin] += buy_amount
-                        self.portfolio["USD"] -= usd_to_add  # Decrease USD balance
+                        self.portfolio["USD"] -= usd_to_add
                         proceeds -= usd_to_add
                         logger.info(f"Distributed ${usd_to_add} to level 5 coin {level_5_coin}")
         else:
-            # Restore normal caps for Levels 1-4
             for level in range(1, 5):
                 level_coins = [t["coin"] for t in self.trade_history if t["confidence"] == level and t["coin"] in self.portfolio["coins"]]
                 if level_coins:
@@ -720,14 +717,11 @@ Output ONLY this JSON:
                             usd_to_add = min(needed_value, proceeds).quantize(Decimal('0.01'))
                             buy_amount = (usd_to_add / current_price).quantize(Decimal('0.000001'))
                             self.portfolio["coins"][level_coin] += buy_amount
-                            self.portfolio["USD"] -= usd_to_add  # Decrease USD balance
+                            self.portfolio["USD"] -= usd_to_add
                             proceeds -= usd_to_add
                             logger.info(f"Distributed ${usd_to_add} to {level_coin} at level {level}")
+        # Removed: if proceeds > 0: self.portfolio["USD"] += proceeds
         
-        if proceeds > 0:
-            self.portfolio["USD"] += proceeds
-            logger.info(f"Stored remaining ${proceeds} in USD")
-
     # In TradeService
     def calculate_portfolio_value(self, market_data):
         total_value = Decimal(str(self.portfolio["USD"]))

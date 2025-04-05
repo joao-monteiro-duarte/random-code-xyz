@@ -1,0 +1,7 @@
+.env
+__pycache__/
+venv/
+Master Logs/
+Scout Logs/
+logs/
+dump.rdb
