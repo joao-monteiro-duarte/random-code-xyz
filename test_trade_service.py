@@ -1761,6 +1761,42 @@ class TestTradeServiceLevel1(unittest.TestCase):
         final_total_value = self.service.calculate_portfolio_value(self.market_data)
         self.assertAlmostEqual(float(final_total_value), 100.00, places=2)
 
+    def test_funding_order_priority(self):
+        # Setup: No USD, coins at Levels 2 and 4, buying a Level 3 coin
+        self.service.portfolio = {"USD": Decimal('0'), "coins": {}}
+        self.service.trade_history = []
+        # Level 2: 2 coins at 5% each ($500), total 10%
+        for i in range(2):
+            coin = f"BTC_L2_{i}"
+            self.service.portfolio["coins"][coin] = Decimal('0.01')  # $500 at $50,000/BTC
+            self.service.trade_history.append({
+                "coin": coin, "action": "BUY", "usd_amount": 500, "confidence": 2, "timestamp": datetime.now()
+            })
+        # Level 4: 1 coin at 20% ($2,000)
+        self.service.portfolio["coins"]["BTC_L4"] = Decimal('0.04')  # $2,000 at $50,000/BTC
+        self.service.trade_history.append({
+            "coin": "BTC_L4", "action": "BUY", "usd_amount": 2000, "confidence": 4, "timestamp": datetime.now()
+        })
+
+        # Add market data for BTC_L3
+        self.market_data["btc_l3"] = {"price": 50000}  # Match other BTC prices
+
+        # Decision: Buy a Level 3 coin (10% of $5,000 = $500)
+        decisions = {"BTC_L3": {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Funding from Level 4 (next higher level) first, evenly distributed
+        self.assertIn("BTC_L3", self.service.portfolio["coins"])
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC_L3"]), 0.01, places=6)  # $500 / $50,000
+        self.assertLess(float(self.service.portfolio["coins"]["BTC_L4"]), 0.04)  # Reduced from Level 4
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC_L2_0"]), 0.01, places=6)  # Level 2 unchanged
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC_L2_1"]), 0.01, places=6)
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        self.assertAlmostEqual(float(total_value), 5000, places=2)  # Total preserved
+
     def tearDown(self):
         self.loop.close()
         asyncio.set_event_loop(None)
