@@ -1,0 +1,8 @@
+aiohttp==3.9.3
+youtube-transcript-api==0.6.2
+langroid>=0.40.0
+python-dotenv==1.0.1
+yt-dlp==2023.12.30
+openai-whisper==20231117  # Specific Whisper version
+redis==5.0.3
+fakeredis==2.21.0
