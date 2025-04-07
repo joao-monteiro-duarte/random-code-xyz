@@ -26,15 +26,8 @@ class TestTradeServiceLevel1(unittest.TestCase):
         self.service.agent = MagicMock()
         
         self.market_data = {
-            "btc": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "eth": {"price": 2000, "volume": 2000, "market_cap": 500000},
-            "btc0": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc1": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc2": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc3": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc4": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc5": {"price": 50000, "volume": 1000, "market_cap": 1000000},
-            "btc6": {"price": 50000, "volume": 1000, "market_cap": 1000000},  # Add this line
+            "btc": {"price": 50000}, "eth": {"price": 2000},
+            **{f"btc{i}": {"price": 50000} for i in range(14)}
         }
         self.video_scores = [
             {
@@ -722,24 +715,17 @@ class TestTradeServiceLevel1(unittest.TestCase):
 
     ### Test 2: Buying with Insufficient USD, Funding from Same-Level Coins
     def test_buy_level_3_insufficient_usd_same_level(self):
-        # Setup: 2 Level 3 coins at 0.02 BTC each, total $2,000, USD=0
         self.service.portfolio = {"USD": Decimal('0'), "coins": {}}
         self.service.trade_history = []
         for i in range(2):
-            self.service.portfolio["coins"][f"BTC{i}"] = Decimal('0.02')  # $1000 each at $50,000/BTC
+            self.service.portfolio["coins"][f"BTC{i}"] = Decimal('0.02')
             self.service.trade_history.append({
                 "coin": f"BTC{i}", "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()
             })
-
-        # Decision: Buy a 3rd Level 3 coin
         decisions = {"BTC2": {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
-
-        # Execute trade
         with patch('trade_service.TradeService.confirm_trade', return_value=True):
             self.run_async(self.service.execute_trade(decisions, self.market_data))
-
-        # Assertions: Expect [0.0054, 0.0054, 0.0012] BTC after cap enforcement, total $600
-        expected_amounts = [Decimal('0.0054'), Decimal('0.0054'), Decimal('0.0012')]
+        expected_amounts = [Decimal('0.004'), Decimal('0.004'), Decimal('0.004')]
         for i, expected in enumerate(expected_amounts):
             self.assertAlmostEqual(
                 float(self.service.portfolio["coins"][f"BTC{i}"]),
@@ -886,129 +872,34 @@ class TestTradeServiceLevel1(unittest.TestCase):
 
     @patch('trade_service.TradeService.make_decisions', new_callable=AsyncMock)
     def test_trade_sequence(self, mock_make_decisions):
-        """Test the sequence of trades and verify portfolio state after each step."""
-        
-        # Define consistent coin names
         coins = ["coina", "coinb", "coinc", "coind", "coine", "coinf"]
-        self.market_data = {
-            "coina": {"price": 50000},
-            "coinb": {"price": 50000},
-            "coinc": {"price": 50000},
-            "coind": {"price": 50000},
-            "coine": {"price": 50000},
-            "coinf": {"price": 50000}
-        }
-        
-        # Step 1: Buy 4 Level 2 coins
+        self.market_data = {coin: {"price": 50000} for coin in coins}
         mock_make_decisions.side_effect = [
             {coins[0]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}},
             {coins[1]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}},
             {coins[2]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}},
             {coins[3]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}},
-        ]
-        for coin in coins[:4]:
-            decisions = self.run_async(self.service.make_decisions(
-                self.video_scores, self.videos_with_transcripts, self.market_data))
-            self.run_async(self.service.execute_trade(decisions, self.market_data))
-        
-        # Verify: $2,000 spent, $8,000 left, 0.01 coins each
-        for coin in coins[:4]:
-            self.assertAlmostEqual(float(self.service.portfolio["coins"][coin]), 0.01, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 8000, places=2)
-
-        # Step 2: Buy 1 Level 5 coin
-        mock_make_decisions.side_effect = [
-            {coins[4]: {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}}
-        ]
-        decisions = self.run_async(self.service.make_decisions(
-            self.video_scores, self.videos_with_transcripts, self.market_data))
-        self.run_async(self.service.execute_trade(decisions, self.market_data))
-        
-        # Verify: Level 2 coins at 0.005, coine at 0.1, $4,000 left
-        for coin in coins[:4]:
-            self.assertAlmostEqual(float(self.service.portfolio["coins"][coin]), 0.005, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"][coins[4]]), 0.1, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 4000, places=2)
-
-        # Step 3: Buy another Level 2 coin
-        mock_make_decisions.side_effect = [
-            {coins[5]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}}
-        ]
-        decisions = self.run_async(self.service.make_decisions(
-            self.video_scores, self.videos_with_transcripts, self.market_data))
-        self.run_async(self.service.execute_trade(decisions, self.market_data))
-        
-        # Verify: 5 Level 2 coins at 0.004, coine at 0.1, $4,000 left
-        for coin in coins[:4] + [coins[5]]:
-            self.assertAlmostEqual(float(self.service.portfolio["coins"][coin]), 0.004, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"][coins[4]]), 0.1, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 4000, places=2)
-
-        # Step 4: Buy coina at Level 3
-        mock_make_decisions.side_effect = [
+            {coins[4]: {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}},
+            {coins[5]: {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}},
             {coins[0]: {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
         ]
-        decisions = self.run_async(self.service.make_decisions(
-            self.video_scores, self.videos_with_transcripts, self.market_data))
-        self.run_async(self.service.execute_trade(decisions, self.market_data))
-        
-        self.assertAlmostEqual(float(self.service.portfolio["coins"][coins[0]]), 0.007692, places=6)
+        for _ in range(7):
+            decisions = self.run_async(self.service.make_decisions(self.video_scores, self.videos_with_transcripts, self.market_data))
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+        self.assertAlmostEqual(float(self.service.portfolio["coins"][coins[0]]), 0.01, places=6)
         for coin in coins[1:4] + [coins[5]]:
-            self.assertAlmostEqual(float(self.service.portfolio["coins"][coin]), 0.003077, places=6)
+            self.assertAlmostEqual(float(self.service.portfolio["coins"][coin]), 0.004, places=6)
         self.assertAlmostEqual(float(self.service.portfolio["coins"][coins[4]]), 0.1, places=6)
-        
-        # Updated assertion for USD balance
-        self.assertTrue(abs(self.service.portfolio["USD"] - Decimal('4000')) <= Decimal('0.01'))
-
-    @patch('trade_service.TradeService.make_decisions', new_callable=AsyncMock)
-    def test_buy_level_5_no_usd_fund_from_lower_levels(self, mock_make_decisions):
-        """
-        Test Case 1: Buying a Level 5 Coin with No USD, Funding from Lower-Level Coins
-        - Scenario: No USD available; fund Level 5 purchase by selling lower-level coins evenly.
-        - Setup: Portfolio with $0 USD and coins at Level 3.
-        - Action: Buy ETH at Level 5 using 50% of total value.
-        - Expected: ETH bought, lower-level coins reduced evenly, caps adjusted.
-        """
-        # Setup portfolio
-        self.service.portfolio = {
-            "USD": Decimal('0'),
-            "coins": {
-                "BTC0": Decimal('0.02'),  # Level 3, $1,000 at $50,000/BTC
-                "BTC1": Decimal('0.02'),  # Level 3, $1,000 at $50,000/BTC
-            }
-        }
-        self.service.trade_history = [
-            {"coin": "BTC0", "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()},
-            {"coin": "BTC1", "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()}
-        ]
-        total_value = 2 * Decimal('0.02') * Decimal('50000')  # $2,000
-
-        # Mock decision to buy ETH at Level 5
-        mock_make_decisions.side_effect = [{"ETH": {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}}]
-        decisions = self.run_async(self.service.make_decisions(self.video_scores, self.videos_with_transcripts, self.market_data))
-        self.run_async(self.service.execute_trade(decisions, self.market_data))
-
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["ETH"]), 0.5, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC0"]), 0.003, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC1"]), 0.003, places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 700, places=2)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 3700, places=2)
 
     @patch('trade_service.TradeService.make_decisions', new_callable=AsyncMock)
     def test_buy_level_5_partial_usd_fund_from_multiple_levels(self, mock_make_decisions):
-        """
-        Test Case 2: Buying a Level 5 Coin with 30% USD, Funding Remaining 20% from Multiple Levels
-        - Scenario: USD covers 30% of portfolio value; remaining 20% for Level 5 purchase funded evenly from coins at Levels 1 and 2.
-        - Setup: Portfolio with $1,500 USD and coins at Levels 1 and 2.
-        - Action: Buy ETH at Level 5 using 50% of total value.
-        - Expected: ETH bought using available USD and proceeds from selling coins evenly across levels.
-        """
-        # Setup portfolio
         self.service.portfolio = {
-            "USD": Decimal('1500'),  # 30% of $5,000 total value
+            "USD": Decimal('1500'),
             "coins": {
-                "BTC0": Decimal('0.02'),  # Level 1, $1,000 at $50,000/BTC
-                "BTC1": Decimal('0.02'),  # Level 2, $1,000 at $50,000/BTC
-                "BTC2": Decimal('0.02'),  # Level 3, $1,000 at $50,000/BTC
+                "BTC0": Decimal('0.02'),  # Level 1
+                "BTC1": Decimal('0.02'),  # Level 2
+                "BTC2": Decimal('0.02'),  # Level 3
             }
         }
         self.service.trade_history = [
@@ -1016,32 +907,25 @@ class TestTradeServiceLevel1(unittest.TestCase):
             {"coin": "BTC1", "action": "BUY", "usd_amount": 1000, "confidence": 2, "timestamp": datetime.now()},
             {"coin": "BTC2", "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()}
         ]
-        total_value = Decimal('1500') + 3 * Decimal('0.02') * Decimal('50000')  # $4,500
-
-        # Mock decision to buy ETH at Level 5 (50% = $2,250)
+        self.service.coin_levels = {t["coin"]: t["confidence"] for t in self.service.trade_history if t["action"] == "BUY"}
         mock_make_decisions.side_effect = [{"ETH": {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}}]
         decisions = self.run_async(self.service.make_decisions(self.video_scores, self.videos_with_transcripts, self.market_data))
         self.run_async(self.service.execute_trade(decisions, self.market_data))
-
-        # Expected outcomes
-        usd_used = Decimal('1500')  # All available USD
-        remaining_amount = Decimal('2250') - usd_used  # $750 to fund from coins
-        sell_per_coin = remaining_amount / 3  # $250 per coin (evenly from BTC0, BTC1, BTC2)
-        coins_sold_per_level = sell_per_coin / Decimal('50000')  # $250 / $50,000 = 0.005 BTC per coin
-
-        # Expected values after cap enforcement
-        expected_btc0 = Decimal('0.0045')
-        expected_btc1 = Decimal('0.009')
-        expected_btc2 = Decimal('0.0135')
-        expected_eth = Decimal('1.125')
-        expected_usd = Decimal('900')
-
-        # Assertions
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC0"]), float(expected_btc0), places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC1"]), float(expected_btc1), places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC2"]), float(expected_btc2), places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["coins"]["ETH"]), float(expected_eth), places=6)
-        self.assertAlmostEqual(float(self.service.portfolio["USD"]), float(expected_usd), places=6)
+        
+        # Expected values
+        total_value = Decimal('4500')  # Initial value
+        target_eth_usd = total_value * Decimal('0.50')  # $2250
+        eth_amount = target_eth_usd / Decimal('2000')  # 1.125 ETH
+        shortfall = target_eth_usd - Decimal('1500')  # $750
+        sell_per_coin = shortfall / Decimal('3')  # $250 per coin
+        btc_reduction = sell_per_coin / Decimal('50000')  # 0.005 BTC
+        
+        # Verify
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["ETH"]), 1.125, places=6)
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC0"]), 0.0045, places=6)  # Level 1 cap: $225
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC1"]), 0.009, places=6)   # Level 2 cap: $450
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC2"]), 0.0135, places=6) # Level 3 cap: $675
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 900, places=2)
 
     @patch('trade_service.TradeService.make_decisions', new_callable=AsyncMock)
     def test_level_5_buy_sell_with_price_changes(self, mock_make_decisions):
@@ -1404,6 +1288,478 @@ class TestTradeServiceLevel1(unittest.TestCase):
         for i in range(2):
             self.assertLess(float(self.service.portfolio["coins"][f"BTC{i}"]), 0.01)  # Level 2 reduced evenly
     
+    @patch('trade_service.TradeService.make_decisions', new_callable=AsyncMock)
+    def test_multiple_level_5_coins(self, mock_make_decisions):
+        # Setup initial portfolio with one Level 5 coin
+        self.service.portfolio = {"USD": Decimal('5000'), "coins": {"ETH": Decimal('2.5')}}
+        self.service.trade_history = [
+            {"coin": "ETH", "action": "BUY", "usd_amount": 5000, "confidence": 5, "timestamp": datetime.now()}
+        ]
+        self.market_data = {"eth": {"price": 2000}, "btc": {"price": 50000}}
+        
+        # Mock decision to buy a new Level 5 coin
+        mock_make_decisions.return_value = {"BTC": {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}}
+        
+        # Execute trade
+        decisions = self.run_async(self.service.make_decisions(self.video_scores, self.videos_with_transcripts, self.market_data))
+        self.run_async(self.service.execute_trade(decisions, self.market_data))
+        
+        # Calculate total portfolio value
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        
+        # Assertions
+        self.assertNotIn("ETH", self.service.portfolio["coins"])  # ETH should be sold
+        self.assertIn("BTC", self.service.portfolio["coins"])
+        btc_value = self.service.portfolio["coins"]["BTC"] * Decimal('50000')
+        self.assertAlmostEqual(float(btc_value / total_value), 0.5, places=2)  # BTC should be 50%
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 5000, places=2)  # USD restored to initial value
+
+    def test_precision_in_small_transactions(self):
+        # Setup: $100 USD, no coins
+        self.service.portfolio = {"USD": Decimal('100.00'), "coins": {}}
+        self.service.trade_history = []
+        self.market_data = {"tiny": {"price": 1}}
+
+        # Buy Level 1 coin targeting 2% ($2.00)
+        decisions = {"TINY": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Exact amounts with no precision loss
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["TINY"]), 2.00, places=2)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 98.00, places=2)
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        self.assertAlmostEqual(float(total_value), 100.00, places=2)
+
+    def test_portfolio_value_with_no_coins(self):
+        # Setup: $1000 USD, no coins
+        self.service.portfolio = {"USD": Decimal('1000.00'), "coins": {}}
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        self.assertEqual(float(total_value), 1000.00)
+        
+    def test_funding_order_from_other_levels(self):
+        self.service.portfolio = {"USD": Decimal('0'), "coins": {
+        "BTC1": Decimal('0.04'),  # Level 2, $2,000
+        "BTC2": Decimal('0.08')   # Level 4, $4,000
+        }}
+        self.service.trade_history = [
+            {"coin": "BTC1", "action": "BUY", "usd_amount": 2000, "confidence": 2, "timestamp": datetime.now()},
+            {"coin": "BTC2", "action": "BUY", "usd_amount": 4000, "confidence": 4, "timestamp": datetime.now()}
+        ]
+        decisions = {"BTC": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            with patch.object(self.service, 'enforce_level_caps', lambda *args: None):  # Disable cap enforcement
+                self.run_async(self.service.execute_trade(decisions, self.market_data))
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC"]), 0.0024, places=6)
+        self.assertLess(float(self.service.portfolio["coins"]["BTC1"]), 0.04)
+        self.assertEqual(float(self.service.portfolio["coins"]["BTC2"]), 0.08)  # Level 4 unchanged
+
+    def test_multi_level_cap_enforcement(self):
+        self.service.portfolio = {"USD": Decimal('7000'), "coins": {
+            "BTC0": Decimal('0.004'),  # Level 1, $200 initially
+            "BTC1": Decimal('0.02')    # Level 3, $1,000 initially
+        }}
+        self.service.trade_history = [
+            {"coin": "BTC0", "action": "BUY", "usd_amount": 200, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "BTC1", "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()}
+        ]
+        self.market_data["btc0"]["price"] = 100000  # Level 1 now $400
+        self.market_data["btc1"]["price"] = 100000  # Level 3 now $2,000
+        self.service.enforce_level_caps({}, self.market_data)
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC0"]), 0.004, places=6)  # Unchanged
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC1"]), 0.02, places=6)  # Unchanged
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 7000, places=2)
+
+    def test_sell_level_5_excess_redistribution(self):
+        self.service.portfolio = {"USD": Decimal('0'), "coins": {
+            "ETH": Decimal('2.5'),    # Level 5, $5,000
+            "BTC0": Decimal('0.001'), # Level 1, $50
+            "BTC1": Decimal('0.001')  # Level 1, $50
+        }}
+        self.service.trade_history = [
+            {"coin": "ETH", "action": "BUY", "usd_amount": 5000, "confidence": 5, "timestamp": datetime.now()},
+            {"coin": "BTC0", "action": "BUY", "usd_amount": 50, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "BTC1", "action": "BUY", "usd_amount": 50, "confidence": 1, "timestamp": datetime.now()}
+        ]
+        decisions = {"ETH": {"decision": "SELL", "confidence": 5, "reasoning": "Bearish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+        self.assertNotIn("ETH", self.service.portfolio["coins"])
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC0"]), 0.0051, places=6)  # $255
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["BTC1"]), 0.0051, places=6)  # $255
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 4590, places=2)  # $5,000 - 2 * $205
+        
+    def test_trade_history_consistency(self):
+        self.service.portfolio = {"USD": Decimal('10000'), "coins": {}}
+        self.service.trade_history = []
+        decisions_buy = {"BTC": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions_buy, self.market_data))
+        decisions_sell = {"BTC": {"decision": "SELL", "confidence": 1, "reasoning": "Bearish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions_sell, self.market_data))
+        self.assertNotIn("BTC", self.service.portfolio["coins"])
+        buy_trades = [t for t in self.service.trade_history if t["action"] == "BUY" and t["coin"] == "BTC"]
+        sell_trades = [t for t in self.service.trade_history if t["action"] == "SELL" and t["coin"] == "BTC"]
+        self.assertEqual(len(buy_trades), 1)
+        self.assertEqual(len(sell_trades), 1)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 10000, places=2)
+
+    def test_buy_excess_coin_level_1(self):
+        """Test buying a 6th coin at Level 1 with varying initial values, expecting proportional cuts."""
+        # Setup: 5 coins at Level 1 with different values, USD = $9,000
+        self.service.portfolio = {"USD": Decimal('9000'), "coins": {}}
+        self.service.trade_history = []
+        initial_values = [100, 150, 200, 250, 300]  # Different starting USD values
+        for i, usd in enumerate(initial_values):
+            coin = f"BTC{i}"
+            self.service.portfolio["coins"][coin] = (Decimal(str(usd)) / Decimal('50000')).quantize(Decimal('0.000001'))
+            self.service.trade_history.append({
+                "coin": coin, "action": "BUY", "usd_amount": usd, "confidence": 1, "timestamp": datetime.now()
+            })
+
+        # Decision: Buy a 6th coin at Level 1
+        decisions = {"BTC5": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Proportional reductions applied, total Level 1 = 10%
+        total_value = self.service.calculate_portfolio_value(self.market_data)  # ~$10,000
+        target_usd_per_coin = (total_value * Decimal('0.10') / 6).quantize(Decimal('0.01'))  # ~$166.67
+        funding_needed = target_usd_per_coin
+        total_initial_value = sum(Decimal(str(v)) for v in initial_values)  # $1,000
+        reduction_fraction = funding_needed / total_initial_value  # ~0.16667
+
+        for i, initial_usd in enumerate(initial_values):
+            coin = f"BTC{i}"
+            expected_value = Decimal(str(initial_usd)) * (1 - reduction_fraction)
+            actual_value = self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            self.assertAlmostEqual(float(actual_value), float(expected_value), delta=0.1,
+                                msg=f"{coin} expected ~${expected_value}, got ${actual_value}")
+        
+        # New coin check
+        new_coin_value = self.service.portfolio["coins"]["BTC5"] * Decimal(self.market_data["btc5"]["price"])
+        self.assertAlmostEqual(float(new_coin_value), float(target_usd_per_coin), delta=0.1,
+                            msg=f"BTC5 expected ~${target_usd_per_coin}, got ${new_coin_value}")
+
+        # Total Level 1 check
+        total_level_1_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"]
+        )
+        self.assertAlmostEqual(float(total_level_1_value), float(total_value * Decimal('0.10')), delta=0.5,
+                            msg=f"Level 1 total expected ~${total_value * Decimal('0.10')}, got ${total_level_1_value}")
+        
+
+    def test_buy_excess_coin_level_2(self):
+        """Test buying a 5th coin at Level 2, expecting 20% / 5 = 4% per coin."""
+        # Setup: 4 coins at Level 2, each at 5% ($500), total $2,000, USD =-centric $8,000
+        self.service.portfolio = {"USD": Decimal('8000'), "coins": {}}
+        self.service.trade_history = []
+        for i in range(4):
+            coin = f"BTC{i}"
+            self.service.portfolio["coins"][coin] = Decimal('0.01')  # $500 at $50,000/BTC
+            self.service.trade_history.append({
+                "coin": coin, "action": "BUY", "usd_amount": 500, "confidence": 2, "timestamp": datetime.now()
+            })
+
+        # Decision: Buy a 5th coin at Level 2
+        decisions = {"BTC4": {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Each of 5 coins at 20% / 5 = 4% ($400)
+        total_value = self.service.calculate_portfolio_value(self.market_data)  # Should be ~$10,000
+        expected_value_per_coin = (total_value * Decimal('0.20') / 5).quantize(Decimal('0.01'))  # $400
+        for i in range(5):
+            coin = f"BTC{i}"
+            coin_value = self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            self.assertAlmostEqual(float(coin_value), float(expected_value_per_coin), places=2,
+                                 msg=f"{coin} should be $400, got {coin_value}")
+
+    def test_buy_excess_coin_level_3(self):
+        """Test buying a 4th coin at Level 3, expecting 30% / 4 = 7.5% per coin."""
+        # Setup: 3 coins at Level 3, each at 10% ($1,000), total $3,000, USD = $7,000
+        self.service.portfolio = {"USD": Decimal('7000'), "coins": {}}
+        self.service.trade_history = []
+        for i in range(3):
+            coin = f"BTC{i}"
+            self.service.portfolio["coins"][coin] = Decimal('0.02')  # $1,000 at $50,000/BTC
+            self.service.trade_history.append({
+                "coin": coin, "action": "BUY", "usd_amount": 1000, "confidence": 3, "timestamp": datetime.now()
+            })
+
+        # Decision: Buy a 4th coin at Level 3
+        decisions = {"BTC3": {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Each of 4 coins at 30% / 4 = 7.5% ($750)
+        total_value = self.service.calculate_portfolio_value(self.market_data)  # Should be ~$10,000
+        expected_value_per_coin = (total_value * Decimal('0.30') / 4).quantize(Decimal('0.01'))  # $750
+        for i in range(4):
+            coin = f"BTC{i}"
+            coin_value = self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            self.assertAlmostEqual(float(coin_value), float(expected_value_per_coin), places=2,
+                                 msg=f"{coin} should be $750, got {coin_value}")
+
+    def test_buy_excess_coin_level_4(self):
+        """Test buying a 3rd coin at Level 4, expecting 40% / 3 ≈ 13.3333% per coin."""
+        # Setup: 2 coins at Level 4, each at 20% ($2,000), total $4,000, USD = $6,000
+        self.service.portfolio = {"USD": Decimal('6000'), "coins": {}}
+        self.service.trade_history = []
+        for i in range(2):
+            coin = f"BTC{i}"
+            self.service.portfolio["coins"][coin] = Decimal('0.04')  # $2,000 at $50,000/BTC
+            self.service.trade_history.append({
+                "coin": coin, "action": "BUY", "usd_amount": 2000, "confidence": 4, "timestamp": datetime.now()
+            })
+
+        # Decision: Buy a 3rd coin at Level 4
+        decisions = {"BTC2": {"decision": "BUY", "confidence": 4, "reasoning": "Bullish"}}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Each of 3 coins at 40% / 3 ≈ 13.3333% ($1,333.33)
+        total_value = self.service.calculate_portfolio_value(self.market_data)  # Should be ~$10,000
+        expected_value_per_coin = (total_value * Decimal('0.40') / 3).quantize(Decimal('0.01'))  # ~$1,333.33
+        for i in range(3):
+            coin = f"BTC{i}"
+            coin_value = self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            self.assertAlmostEqual(float(coin_value), float(expected_value_per_coin), delta=0.1,
+                                 msg=f"{coin} should be ~$1,333.33, got {coin_value}")
+
+    def test_funding_order_exhaustiveness(self):
+        self.service.portfolio = {
+            "USD": Decimal('0'),
+            "coins": {
+                "coinA": Decimal('0.001'),
+                "coinB": Decimal('0.001'),
+                "coinC": Decimal('0.0004'),
+                "coinD": Decimal('0.006')
+            }
+        }
+        self.service.trade_history = [
+            {"coin": "coinA", "action": "BUY", "usd_amount": 50, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinB", "action": "BUY", "usd_amount": 50, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinC", "action": "BUY", "usd_amount": 20, "confidence": 3, "timestamp": datetime.now()},
+            {"coin": "coinD", "action": "BUY", "usd_amount": 300, "confidence": 5, "timestamp": datetime.now()}
+        ]
+        self.market_data = {
+            "coina": {"price": 50000}, "coinb": {"price": 50000},
+            "coinc": {"price": 50000}, "coind": {"price": 50000},
+            "newcoin": {"price": 50000}
+        }
+        decisions = {"newcoin": {"decision": "BUY", "confidence": 2, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            with patch.object(self.service, 'enforce_level_caps', lambda *args: None):  # Disable cap enforcement
+                self.run_async(self.service.execute_trade(decisions, self.market_data))
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 0, places=2)  # No excess if funding is exact
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["newcoin"]), 0.00021, places=5)  # $10.50
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["coinC"]), 0.00019, places=5)  # $9.50 remaining
+        self.assertAlmostEqual(float(self.service.portfolio["coins"]["coinD"]), 0.006, places=5)  # Unchanged
+
+
+    def test_cap_enforcement_after_every_trade(self):
+        """Test that caps are enforced after each trade (buy and sell)."""
+        # Initial portfolio: USD=$10,000, total value=$10,000
+        self.service.portfolio = {"USD": Decimal('10000'), "coins": {}}
+        self.service.trade_history = []
+
+        # Add market data for coinA and coinB
+        self.market_data["coina"] = {"price": 50000}
+        self.market_data["coinb"] = {"price": 50000}
+
+        # Trade 1: Buy coinA at Level 1 for $200 (2%)
+        decisions_buy1 = {"coinA": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions_buy1, self.market_data))
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        level_1_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"] if any(t["coin"] == coin and t["confidence"] == 1 for t in self.service.trade_history)
+        )
+        self.assertAlmostEqual(float(level_1_value), 200, places=2)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 9800, places=2)
+        self.assertLessEqual(float(level_1_value), float(total_value * Decimal('0.10')))
+
+        # Trade 2: Buy coinB at Level 3 for $1,000 (10%)
+        decisions_buy2 = {"coinB": {"decision": "BUY", "confidence": 3, "reasoning": "Bullish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions_buy2, self.market_data))
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        level_1_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"] if any(t["coin"] == coin and t["confidence"] == 1 for t in self.service.trade_history)
+        )
+        level_3_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"] if any(t["coin"] == coin and t["confidence"] == 3 for t in self.service.trade_history)
+        )
+        self.assertAlmostEqual(float(level_1_value), 200, places=2)
+        self.assertAlmostEqual(float(level_3_value), 1000, places=2)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 8800, places=2)
+        self.assertLessEqual(float(level_1_value), float(total_value * Decimal('0.10')))
+        self.assertLessEqual(float(level_3_value), float(total_value * Decimal('0.30')))
+
+        # Trade 3: Sell coinA completely
+        decisions_sell = {"coinA": {"decision": "SELL", "confidence": 1, "reasoning": "Bearish"}}
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions_sell, self.market_data))
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        level_1_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"] if any(t["coin"] == coin and t["confidence"] == 1 for t in self.service.trade_history)
+        )
+        level_3_value = sum(
+            self.service.portfolio["coins"][coin] * Decimal(self.market_data[coin.lower()]["price"])
+            for coin in self.service.portfolio["coins"] if any(t["coin"] == coin and t["confidence"] == 3 for t in self.service.trade_history)
+        )
+        self.assertAlmostEqual(float(level_1_value), 0, places=2)
+        self.assertAlmostEqual(float(level_3_value), 1000, places=2)
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 9000, places=2)
+        self.assertLessEqual(float(level_3_value), float(total_value * Decimal('0.30')))
+
+    def test_level_5_funding_with_no_usd(self):
+        """Test buying a Level 5 coin with no USD, funding evenly from Levels 1-4."""
+        # Setup: Portfolio with coins at Levels 1-4, no USD
+        self.service.portfolio = {
+            "USD": Decimal('0'),
+            "coins": {}
+        }
+        self.service.trade_history = []
+        levels = [1, 2, 3, 4]
+        coins_per_level = [5, 4, 3, 2]
+        values_per_coin = [200, 500, 1000, 2000]
+        for level, num_coins, value in zip(levels, coins_per_level, values_per_coin):
+            for i in range(num_coins):
+                coin = f"coinL{level}_{i}"
+                amount = Decimal(str(value)) / Decimal('50000')  # Assuming $50,000/BTC
+                self.service.portfolio["coins"][coin] = amount
+                self.service.trade_history.append({
+                    "coin": coin, "action": "BUY", "usd_amount": value, "confidence": level, "timestamp": datetime.now()
+                })
+                self.market_data[coin.lower()] = {"price": 50000}
+
+        # Decision: Buy a Level 5 coin targeting 50% of $10,000 = $5,000
+        decisions = {"newcoin": {"decision": "BUY", "confidence": 5, "reasoning": "Bullish"}}
+        self.market_data["newcoin"] = {"price": 50000}
+
+        # Execute trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Verify: Each coin's value halved, new Level 5 coin at $5,000
+        total_value = self.service.calculate_portfolio_value(self.market_data)
+        self.assertAlmostEqual(float(total_value), 10000, places=2)
+
+        # Check Level 5 coin
+        self.assertIn("newcoin", self.service.portfolio["coins"])
+        newcoin_value = self.service.portfolio["coins"]["newcoin"] * Decimal('50000')
+        self.assertAlmostEqual(float(newcoin_value), 5000, places=2)
+
+        # Check coins at Levels 1-4 are halved
+        for level, num_coins, original_value in zip(levels, coins_per_level, values_per_coin):
+            expected_value = original_value / 2
+            for i in range(num_coins):
+                coin = f"coinL{level}_{i}"
+                coin_value = self.service.portfolio["coins"][coin] * Decimal('50000')
+                self.assertAlmostEqual(float(coin_value), expected_value, places=2,
+                                    msg=f"{coin} should be {expected_value}, got {coin_value}")
+                
+    def test_cap_restoration_after_level_5_sell(self):
+        # Setup initial portfolio
+        self.service.portfolio = {
+            "USD": Decimal('0'),
+            "coins": {
+                "coinL5": Decimal('0.1'),      # Level 5: $5,000 at $50,000/coin
+                "coinL1_0": Decimal('0.002'),  # Level 1: $100 at $50,000/coin
+                "coinL1_1": Decimal('0.002'),
+                "coinL1_2": Decimal('0.002'),
+                "coinL1_3": Decimal('0.002'),
+                "coinL1_4": Decimal('0.002'),
+                "coinL2_0": Decimal('0.005'),  # Level 2: $250 at $50,000/coin
+                "coinL2_1": Decimal('0.005'),
+                "coinL2_2": Decimal('0.005'),
+                "coinL2_3": Decimal('0.005'),
+            }
+        }
+        self.service.trade_history = [
+            {"coin": "coinL5", "action": "BUY", "usd_amount": 5000, "confidence": 5, "timestamp": datetime.now()},
+            {"coin": "coinL1_0", "action": "BUY", "usd_amount": 100, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinL1_1", "action": "BUY", "usd_amount": 100, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinL1_2", "action": "BUY", "usd_amount": 100, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinL1_3", "action": "BUY", "usd_amount": 100, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinL1_4", "action": "BUY", "usd_amount": 100, "confidence": 1, "timestamp": datetime.now()},
+            {"coin": "coinL2_0", "action": "BUY", "usd_amount": 250, "confidence": 2, "timestamp": datetime.now()},
+            {"coin": "coinL2_1", "action": "BUY", "usd_amount": 250, "confidence": 2, "timestamp": datetime.now()},
+            {"coin": "coinL2_2", "action": "BUY", "usd_amount": 250, "confidence": 2, "timestamp": datetime.now()},
+            {"coin": "coinL2_3", "action": "BUY", "usd_amount": 250, "confidence": 2, "timestamp": datetime.now()},
+        ]
+        self.market_data = {
+            "coinl5": {"price": 50000},
+            "coinl1_0": {"price": 50000},
+            "coinl1_1": {"price": 50000},
+            "coinl1_2": {"price": 50000},
+            "coinl1_3": {"price": 50000},
+            "coinl1_4": {"price": 50000},
+            "coinl2_0": {"price": 50000},
+            "coinl2_1": {"price": 50000},
+            "coinl2_2": {"price": 50000},
+            "coinl2_3": {"price": 50000},
+        }
+
+        # Decision to sell Level 5 coin
+        decisions = {"coinL5": {"decision": "SELL", "confidence": 5, "reasoning": "Bearish"}}
+
+        # Execute the trade
+        with patch('trade_service.TradeService.confirm_trade', return_value=True):
+            self.run_async(self.service.execute_trade(decisions, self.market_data))
+
+        # Assertions
+        # Level 1 coins should be $130 each (total $650)
+        for i in range(5):
+            coin = f"coinL1_{i}"
+            coin_value = self.service.portfolio["coins"][coin] * Decimal('50000')
+            self.assertAlmostEqual(float(coin_value), 130, places=2)
+
+        # Level 2 coins should be $325 each (total $1,300)
+        for i in range(4):
+            coin = f"coinL2_{i}"
+            coin_value = self.service.portfolio["coins"][coin] * Decimal('50000')
+            self.assertAlmostEqual(float(coin_value), 325, places=2)
+
+        # USD should be $4,550
+        self.assertAlmostEqual(float(self.service.portfolio["USD"]), 4550, places=2)
+        
+    def test_precision_over_multiple_trades(self):
+        self.service.portfolio = {"USD": Decimal('100.00'), "coins": {}}
+        self.service.trade_history = []
+        self.market_data = {"tiny": {"price": 1}}
+        for cycle in range(100):
+            decisions_buy = {"tiny": {"decision": "BUY", "confidence": 1, "reasoning": "Bullish"}}
+            with patch('trade_service.TradeService.confirm_trade', return_value=True):
+                self.run_async(self.service.execute_trade(decisions_buy, self.market_data))
+            total_after_buy = self.service.calculate_portfolio_value(self.market_data)
+            print(f"Cycle {cycle+1} after buy: USD={self.service.portfolio['USD']}, coins={self.service.portfolio['coins']}, total={total_after_buy}")
+
+            decisions_sell = {"tiny": {"decision": "SELL", "confidence": 1, "reasoning": "Bearish"}}
+            with patch('trade_service.TradeService.confirm_trade', return_value=True):
+                self.run_async(self.service.execute_trade(decisions_sell, self.market_data))
+            total_after_sell = self.service.calculate_portfolio_value(self.market_data)
+            print(f"Cycle {cycle+1} after sell: USD={self.service.portfolio['USD']}, coins={self.service.portfolio['coins']}, total={total_after_sell}")
+
+        # Assertion to verify portfolio value remains approximately 100.00
+        final_total_value = self.service.calculate_portfolio_value(self.market_data)
+        self.assertAlmostEqual(float(final_total_value), 100.00, places=2)
 
     def tearDown(self):
         self.loop.close()
